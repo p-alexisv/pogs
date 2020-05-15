@@ -1,0 +1,132 @@
+How to make kpack work with private registry using self-signed certs
+
+
+1. Get a copy of the CA cert file and rename it to the x509 hash value.
+
+e.g.,
+$ openssl x509 -hash -fingerprint -noout -in harbor-ca.pem
+9xx2x831
+$
+$ cp harbor-ca.pem 9xx2x831.0
+$
+
+2. Create a configmap in the k8s cluster to store the CA cert data.
+
+e.g.,
+$ kubectl -n kpack create configmap ca-pemstore --from-file=/home/ubuntu/kpack/slrs-kpack/9ff2c831.0
+configmap/ca-pemstore created
+$
+
+
+3. Modify the release-x.x.x.yaml to declare the volumes and volumeMounts for the kpack-controller Deployment.  The following is an example diff between the original and modified yaml.
+
+e.g.,
+$ diff release-0.0.8.yaml release-0.0.8-modified.yaml
+106a107,113
+>       volumes: [{
+>         name: ca-pemstore,
+>         configMap: {
+>           name: ca-pemstore,
+>           defaultMode: 420
+>         }
+>       }]
+108a116,120
+>         volumeMounts: [{
+>           mountPath: /etc/ssl/certs/9xx2x831.0,
+>           subPath: 9xx2x831.0,
+>           name: ca-pemstore
+>         }]
+$
+
+
+4. Apply the changes to the yaml file.
+
+e.g.,
+$ kubectl apply --filename release-0.0.8-modified.yaml
+
+
+5. Once the kpack-controller pod is running, verify if the pod now trusts the CA by running the openssl command from the pod to connect to the private registry.  From the output, you'd see "Verify return code" and if it's "0 (ok)" then that means it's successful.
+
+e.g.,
+$ kubectl -n kpack exec -it kpack-controller-57f469944-xxxxx -- openssl s_client -connect harbor.fqdn.pivotal.io:443
+
+
+
+6. There are 2 more images that need to have the CA cert.  These are the images used by the ClusterBuilder and build-init.  For ClusterBuilder, get the image name that it's using.
+
+e.g.,
+$ grep image cluster-builder.yaml
+  image: gcr.io/paketo-buildpacks/builder:base
+$
+
+Then, create a Dockerfile using the above image and add the CA cert file.  
+
+e.g.,
+
+$ cat Dockerfile
+FROM gcr.io/paketo-buildpacks/builder:base
+MAINTAINER avillalon@pivotal.io
+
+ADD 9xx2x831.0 /etc/ssl/certs/9xx2x831.0
+
+$ ls -l
+total 16
+-rw-r--r--  1 avillalon  staff  2232 May 14 14:11 9xx2x831.0
+-rw-r--r--  1 avillalon  staff   118 May 14 14:07 Dockerfile
+$
+
+Then, build the image and push it to your registry.
+
+e.g.,
+$ docker build --tag=alexisv914/builder-customca:0.1 .
+
+$ docker push alexisv914/builder-customca:0.1
+
+Then, modify the cluster-builder to use the custom image.
+
+e.g.,
+$ diff cluster-builder.yaml.bak cluster-builder.yaml
+6c6
+<   image: gcr.io/paketo-buildpacks/builder:base
+---
+>   image: alexisv914/builder-customca:0.1
+$ kubectl apply -f cluster-builder.yaml
+clusterbuilder.build.pivotal.io/default configured
+$
+
+
+7. Do the same customization for the build-init image.
+
+e.g.,
+$ grep -A1 BUILD_INIT_IMAGE release-0.0.8.yaml
+        - name: BUILD_INIT_IMAGE
+          value: gcr.io/cf-build-service-public/kpack/build-init@sha256:b90a4d2c027ac6cf6b2904383211084d33d6faf9fed38a3d55a09b54e6f671bf
+$
+
+Create a Dockerfile using the above image and add the CA cert file.  
+
+e.g.,
+
+$ cat Dockerfile
+FROM gcr.io/cf-build-service-public/kpack/build-init@sha256:b90a4d2c027ac6cf6b2904383211084d33d6faf9fed38a3d55a09b54e6f671bf
+MAINTAINER avillalon@pivotal.io
+
+ADD 9xx2x831.0 /etc/ssl/certs/9xx2x831.0
+
+$ ls -l
+total 16
+-rw-r--r--  1 avillalon  staff  2232 May 14 14:11 9xx2x831.0
+-rw-r--r--  1 avillalon  staff   118 May 14 14:07 Dockerfile
+$
+
+Then, build the image and push it to your registry.
+
+e.g.,
+$ docker build --tag=alexisv914/build-init-customca:0.1 .
+
+$ docker push alexisv914/build-init-customca:0.1
+
+Then, modify the release yaml file replacing the value for BUILD_INIT_IMAGE with your custom image reference.
+
+
+That's it.  You should now be able to get kpack to talk to your private registry using self-signed certs.
