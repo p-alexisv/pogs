@@ -13,7 +13,7 @@ $
 2. Create a configmap in the k8s cluster to store the CA cert data.
 
 e.g.,
-$ kubectl -n kpack create configmap ca-pemstore --from-file=/home/ubuntu/kpack/slrs-kpack/9ff2c831.0
+$ kubectl -n kpack create configmap ca-pemstore --from-file=/home/ubuntu/kpack/slrs-kpack/9xx2x831.0
 configmap/ca-pemstore created
 $
 
